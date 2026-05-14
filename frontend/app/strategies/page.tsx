@@ -3,34 +3,32 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import type { Strategy } from '@/types';
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    ACTIVE:   'bg-green-400/10 text-green-400 border-green-400/30',
-    INACTIVE: 'bg-gray-400/10 text-gray-400 border-gray-400/30',
-    ERROR:    'bg-red-400/10  text-red-400  border-red-400/30',
-  };
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded border font-medium ${styles[status] ?? styles.INACTIVE}`}>
-      {status}
-    </span>
-  );
-}
+import { StatusBanner } from '@/components/StatusBanner';
+import { SkeletonLoader } from '@/components/SkeletonLoader';
+import { GlowBadge } from '@/components/GlowBadge';
 
 export default function StrategiesPage() {
   const [strategies, setStrategies]   = useState<Strategy[]>([]);
   const [available, setAvailable]     = useState<any[]>([]);
   const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState<string | null>(null);
   const [creating, setCreating]       = useState(false);
   const [form, setForm] = useState({
     name: '', class_name: '', symbols: 'AAPL', timeframe: '1m', parameters: '{}',
   });
 
   const load = async () => {
-    const [strats, avail] = await Promise.all([api.getStrategies(), api.getAvailableStrategies()]);
-    setStrategies(strats);
-    setAvailable(avail);
-    setLoading(false);
+    try {
+      setError(null);
+      const [strats, avail] = await Promise.all([api.getStrategies(), api.getAvailableStrategies()]);
+      setStrategies(strats);
+      setAvailable(avail);
+    } catch (e: any) {
+      console.warn('Failed to load strategies:', e);
+      setError('Backend unavailable. Make sure the server is running on port 8000.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -61,88 +59,108 @@ export default function StrategiesPage() {
     setCreating(false);
   };
 
-  if (loading) return <div className="flex items-center justify-center h-screen text-gray-500 text-sm">Loading…</div>;
-
   return (
-    <div className="min-h-screen bg-[#0a0b0e] text-gray-100">
-      {/* Nav */}
-      <div className="border-b border-white/5 px-6 py-3 flex gap-4 items-center">
-        <span className="font-bold text-sm text-white">QuantTerminal</span>
-        <span className="text-white/10">|</span>
-        <a href="/"           className="text-xs text-gray-500 hover:text-gray-300 transition-colors">Dashboard</a>
-        <a href="/strategies" className="text-xs text-blue-400">Strategies</a>
-        <a href="/backtests"  className="text-xs text-gray-500 hover:text-gray-300 transition-colors">Backtests</a>
-      </div>
+    <div className="flex flex-col h-full overflow-hidden p-6 gap-6 relative z-10 overflow-y-auto">
+      <header className="flex flex-col gap-4 shrink-0">
+        <h1 className="text-2xl font-bold text-white tracking-tight">Trading Strategies</h1>
+        <StatusBanner error={error} />
+      </header>
 
-      <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      <div className="max-w-4xl space-y-8 w-full pb-10">
         {/* Create form */}
-        <div className="rounded-xl border border-white/5 bg-[#0d0e12] p-5">
-          <h2 className="text-sm font-semibold mb-4 text-gray-300">Create Strategy</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <input className="input col-span-1" placeholder="Display name" value={form.name}
-              onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-            <select className="input" value={form.class_name}
-              onChange={e => setForm(f => ({ ...f, class_name: e.target.value }))}>
-              <option value="">Select strategy class</option>
-              {available.map(a => <option key={a.class_name} value={a.class_name}>{a.name}</option>)}
-            </select>
-            <input className="input" placeholder="Symbols (comma-sep)" value={form.symbols}
-              onChange={e => setForm(f => ({ ...f, symbols: e.target.value }))} />
-            <select className="input" value={form.timeframe}
-              onChange={e => setForm(f => ({ ...f, timeframe: e.target.value }))}>
-              {['1m', '5m', '15m', '1h'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
-            </select>
-            <input className="input col-span-2 font-mono text-sm" placeholder='Parameters JSON, e.g. {"fast_period":20}' value={form.parameters}
-              onChange={e => setForm(f => ({ ...f, parameters: e.target.value }))} />
+        <div className="glow-card p-6">
+          <h2 className="text-sm font-semibold mb-5 text-gray-200">Deploy New Strategy</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-1.5 col-span-1">
+              <label className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">Display Name</label>
+              <input className="input" placeholder="e.g. MACD Alpha" value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="flex flex-col gap-1.5 col-span-1">
+              <label className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">Strategy Class</label>
+              <select className="input" value={form.class_name}
+                onChange={e => setForm(f => ({ ...f, class_name: e.target.value }))}>
+                <option value="">Select strategy class</option>
+                {available.map(a => <option key={a.class_name} value={a.class_name}>{a.name}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5 col-span-1">
+              <label className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">Symbols</label>
+              <input className="input" placeholder="AAPL, MSFT" value={form.symbols}
+                onChange={e => setForm(f => ({ ...f, symbols: e.target.value }))} />
+            </div>
+            <div className="flex flex-col gap-1.5 col-span-1">
+              <label className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">Timeframe</label>
+              <select className="input" value={form.timeframe}
+                onChange={e => setForm(f => ({ ...f, timeframe: e.target.value }))}>
+                {['1m', '5m', '15m', '1h'].map(tf => <option key={tf} value={tf}>{tf}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1.5 col-span-2">
+              <label className="text-[10px] uppercase tracking-wider text-gray-500 font-medium">Parameters (JSON)</label>
+              <input className="input font-mono text-sm" placeholder='{"fast_period":20}' value={form.parameters}
+                onChange={e => setForm(f => ({ ...f, parameters: e.target.value }))} />
+            </div>
           </div>
           <button onClick={handleCreate} disabled={creating || !form.name || !form.class_name}
-            className="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm rounded-lg transition-colors font-medium">
-            {creating ? 'Creating…' : 'Create Strategy'}
+            className="mt-6 w-full btn-primary">
+            {creating ? 'Deploying...' : 'Deploy Strategy'}
           </button>
         </div>
 
         {/* Strategy list */}
-        <div className="space-y-3">
-          {strategies.length === 0 && (
-            <p className="text-center text-gray-600 text-sm py-8">No strategies yet. Create one above.</p>
-          )}
-          {strategies.map(s => (
-            <div key={s.id} className="rounded-xl border border-white/5 bg-[#0d0e12] p-4 flex items-center justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-sm">{s.name}</span>
-                  <StatusBadge status={s.status} />
-                  <span className="text-xs text-gray-600">{s.class_name}</span>
-                </div>
-                <div className="flex gap-3 text-xs text-gray-500 font-mono">
-                  <span>{s.symbols.join(', ')}</span>
-                  <span>·</span>
-                  <span>{s.timeframe}</span>
-                  <span>·</span>
-                  <span>{JSON.stringify(s.parameters)}</span>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                {s.status !== 'ACTIVE' ? (
-                  <button onClick={() => handleStart(s.id)}
-                    className="px-3 py-1.5 text-xs bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg border border-green-400/20 transition-colors font-medium">
-                    Start
-                  </button>
-                ) : (
-                  <button onClick={() => handleStop(s.id)}
-                    className="px-3 py-1.5 text-xs bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg border border-red-400/20 transition-colors font-medium">
-                    Stop
-                  </button>
-                )}
-              </div>
+        <div className="space-y-4">
+          <h2 className="text-sm font-semibold text-gray-200">Active Deployments</h2>
+          
+          {loading ? (
+            <div className="space-y-3">
+              <SkeletonLoader className="h-24 w-full" />
+              <SkeletonLoader className="h-24 w-full" />
             </div>
-          ))}
+          ) : strategies.length === 0 ? (
+            <div className="glass-panel p-10 flex flex-col items-center justify-center opacity-70">
+              <div className="text-3xl mb-3">🤖</div>
+              <p className="text-gray-400 text-sm font-medium">No strategies deployed</p>
+              <p className="text-gray-500 text-xs mt-1">Configure and deploy your first strategy above</p>
+            </div>
+          ) : (
+            strategies.map(s => (
+              <div key={s.id} className="glass-panel p-5 flex items-center justify-between hover:bg-white/[0.03] transition-all group">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="font-bold text-base text-gray-100">{s.name}</span>
+                    <GlowBadge 
+                      status={s.status === 'ACTIVE' ? 'success' : s.status === 'ERROR' ? 'danger' : 'neutral'} 
+                      text={s.status} 
+                    />
+                    <span className="text-xs text-gray-500 uppercase tracking-wider bg-white/5 px-2 py-0.5 rounded border border-white/5">{s.class_name}</span>
+                  </div>
+                  <div className="flex gap-4 text-xs text-gray-400 font-mono">
+                    <span className="font-semibold text-gray-300">{s.symbols.join(', ')}</span>
+                    <span className="text-gray-600">•</span>
+                    <span className="text-blue-400 font-bold">{s.timeframe}</span>
+                    <span className="text-gray-600">•</span>
+                    <span className="truncate max-w-xs">{JSON.stringify(s.parameters)}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  {s.status !== 'ACTIVE' ? (
+                    <button onClick={() => handleStart(s.id)}
+                      className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-green-500/10 hover:bg-green-500/20 text-green-400 rounded-lg border border-green-500/20 transition-all shadow-[0_0_10px_rgba(34,197,94,0)] hover:shadow-[0_0_15px_rgba(34,197,94,0.2)]">
+                      Start
+                    </button>
+                  ) : (
+                    <button onClick={() => handleStop(s.id)}
+                      className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg border border-red-500/20 transition-all shadow-[0_0_10px_rgba(239,68,68,0)] hover:shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+                      Stop
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
-
-      <style jsx>{`
-        .input { @apply w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50 transition-colors; }
-      `}</style>
     </div>
   );
 }

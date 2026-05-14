@@ -1,13 +1,16 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { createChart, CandlestickSeries, HistogramSeries, IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts';
 import { useMarketStore } from '@/stores/market';
 import { useSignalStore } from '@/stores/signals';
+import { SkeletonLoader } from '@/components/SkeletonLoader';
 
 interface Props {
   symbol: string;
 }
+
+const EMPTY_CANDLES: any[] = [];
 
 export function PriceChart({ symbol }: Props) {
   const chartRef    = useRef<HTMLDivElement>(null);
@@ -16,25 +19,26 @@ export function PriceChart({ symbol }: Props) {
   const volumeSeries = useRef<ISeriesApi<'Histogram'> | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const candles = useMarketStore(s => s.candles[symbol] ?? []);
-  const signals = useSignalStore(s => s.signals.filter(sig => sig.symbol === symbol));
+  const candles = useMarketStore(useCallback((s: any) => s.candles[symbol] ?? EMPTY_CANDLES, [symbol]));
+  const allSignals = useSignalStore(useCallback((s: any) => s.signals, []))
+  const signals = useMemo(() => allSignals.filter((sig: any) => sig.symbol === symbol), [allSignals, symbol]);
 
   // Initialize chart
   useEffect(() => {
     if (!chartRef.current) return;
     chart.current = createChart(chartRef.current, {
       layout: {
-        background: { color: '#0d0e12' },
+        background: { color: 'transparent' },
         textColor:  '#9ca3af',
       },
       grid: {
-        vertLines:   { color: '#1f2028' },
-        horzLines:   { color: '#1f2028' },
+        vertLines:   { color: 'rgba(255,255,255,0.02)' },
+        horzLines:   { color: 'rgba(255,255,255,0.02)' },
       },
       crosshair: { mode: 1 },
-      rightPriceScale: { borderColor: '#2d2f3a' },
+      rightPriceScale: { borderColor: 'rgba(255,255,255,0.05)' },
       timeScale: {
-        borderColor:    '#2d2f3a',
+        borderColor:    'rgba(255,255,255,0.05)',
         timeVisible:    true,
         secondsVisible: false,
       },
@@ -52,7 +56,7 @@ export function PriceChart({ symbol }: Props) {
     });
 
     volumeSeries.current = chart.current.addSeries(HistogramSeries, {
-      color:   '#3b82f640',
+      color:   'rgba(59, 130, 246, 0.2)',
       priceFormat: { type: 'volume' },
       priceScaleId: 'vol',
     });
@@ -89,7 +93,7 @@ export function PriceChart({ symbol }: Props) {
     const volumeData = candles.map(c => ({
       time:  (new Date(c.open_time).getTime() / 1000) as UTCTimestamp,
       value: Number(c.volume),
-      color: Number(c.close) >= Number(c.open) ? '#22c55e40' : '#ef444440',
+      color: Number(c.close) >= Number(c.open) ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
     })).sort((a, b) => a.time - b.time);
 
     candleSeries.current.setData(candleData);
@@ -113,13 +117,10 @@ export function PriceChart({ symbol }: Props) {
   }, [candles, signals]);
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full rounded-lg overflow-hidden">
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#0d0e12] z-10">
-          <div className="text-center">
-            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-            <p className="text-gray-500 text-sm">Waiting for market data…</p>
-          </div>
+        <div className="absolute inset-0 z-10 flex flex-col gap-2 p-2">
+           <SkeletonLoader className="w-full h-full rounded-lg opacity-50" />
         </div>
       )}
       <div ref={chartRef} className="w-full h-full" />

@@ -89,7 +89,7 @@ class Signal(Base):
     confidence:    Mapped[float|None]     = mapped_column(Float)
     rejected:      Mapped[bool]           = mapped_column(Boolean, default=False)
     reject_reason: Mapped[str|None]       = mapped_column(String(100))
-    metadata:      Mapped[dict]           = mapped_column(JSONB, default=dict)
+    meta:          Mapped[dict]           = mapped_column("metadata", JSONB, default=dict)
     generated_at:  Mapped[datetime]       = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
 
     strategy: Mapped["Strategy|None"] = relationship("Strategy", back_populates="signals")

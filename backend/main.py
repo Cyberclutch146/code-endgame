@@ -11,7 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
-from db import engine, Base
+from db import engine, Base, SessionLocal
 from redis_client import get_redis, close_redis
 from ws.manager import ws_manager
 from market.ingestion import run_market_ingestion
@@ -26,7 +26,6 @@ from routes.backtests import router as backtest_router
 structlog.configure(
     processors=[
         structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.dev.ConsoleRenderer() if get_settings().is_dev else structlog.processors.JSONRenderer(),
     ]
@@ -41,11 +40,13 @@ async def lifespan(app: FastAPI):
     log.info("startup_begin", env=settings.app_env)
 
     # 1. Verify DB connection
+    db_ok = False
     try:
         from sqlalchemy import text
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
         log.info("db_connected")
+        db_ok = True
     except Exception as e:
         log.error("db_connection_failed", error=str(e))
 
@@ -58,76 +59,81 @@ async def lifespan(app: FastAPI):
         log.error("redis_connection_failed", error=str(e))
 
     # 3. Wire strategy engine → risk engine → paper trader pipeline
-    from strategy.engine import strategy_engine
-    from risk.engine import risk_engine
-    from trading.paper import paper_trader
-    from models import RiskConfig
-    from sqlalchemy import select
+    try:
+        from strategy.engine import strategy_engine
+        from risk.engine import risk_engine
+        from trading.paper import paper_trader
+        from models import RiskConfig
+        from sqlalchemy import select
 
-    async def signal_handler(signal, strategy_model):
-        """Called by strategy engine on every new signal."""
-        # Load risk config from DB
-        async with SessionLocal() as session:
-            result = await session.execute(
-                select(RiskConfig).where(RiskConfig.strategy_id == strategy_model.id)
-            )
-            rc = result.scalar_one_or_none()
-        if not rc:
-            log.warning("no_risk_config", strategy_id=str(strategy_model.id))
-            return
+        async def signal_handler(signal, strategy_model):
+            """Called by strategy engine on every new signal."""
+            # Load risk config from DB
+            async with SessionLocal() as session:
+                result = await session.execute(
+                    select(RiskConfig).where(RiskConfig.strategy_id == strategy_model.id)
+                )
+                rc = result.scalar_one_or_none()
+            if not rc:
+                log.warning("no_risk_config", strategy_id=str(strategy_model.id))
+                return
 
-        approved, reason = risk_engine.check(signal, rc)
+            approved, reason = risk_engine.check(signal, rc)
 
-        # Persist and broadcast signal regardless
-        from models import Signal as SignalModel
-        signal_data = {
-            "strategy_id":  str(strategy_model.id),
-            "symbol":       signal.symbol,
-            "direction":    signal.direction,
-            "entry_price":  str(signal.entry_price),
-            "stop_loss":    str(signal.stop_loss) if signal.stop_loss else None,
-            "take_profit":  str(signal.take_profit) if signal.take_profit else None,
-            "confidence":   signal.confidence,
-            "rejected":     not approved,
-            "reject_reason": None if approved else reason,
-        }
-        await ws_manager.broadcast_all("signal", signal_data)
+            # Persist and broadcast signal regardless
+            from models import Signal as SignalModel
+            signal_data = {
+                "strategy_id":  str(strategy_model.id),
+                "symbol":       signal.symbol,
+                "direction":    signal.direction,
+                "entry_price":  str(signal.entry_price),
+                "stop_loss":    str(signal.stop_loss) if signal.stop_loss else None,
+                "take_profit":  str(signal.take_profit) if signal.take_profit else None,
+                "confidence":   signal.confidence,
+                "rejected":     not approved,
+                "reject_reason": None if approved else reason,
+            }
+            await ws_manager.broadcast_all("signal", signal_data)
 
-        if approved:
-            await paper_trader.execute(signal, strategy_model, rc)
-            # Update unrealized PnL
-            await paper_trader.update_unrealized_pnl(
-                signal.symbol, float(signal.entry_price)
-            )
-        else:
-            log.info("signal_rejected", reason=reason, symbol=signal.symbol)
+            if approved:
+                await paper_trader.execute(signal, strategy_model, rc)
+                # Update unrealized PnL
+                await paper_trader.update_unrealized_pnl(
+                    signal.symbol, float(signal.entry_price)
+                )
+            else:
+                log.info("signal_rejected", reason=reason, symbol=signal.symbol)
 
-    # Register signal handler with strategy engine
-    strategy_engine.register_signal_callback(signal_handler)
+        # Register signal handler with strategy engine
+        strategy_engine.register_signal_callback(signal_handler)
 
-    # Register loss callback with paper trader
-    paper_trader.register_loss_callback(risk_engine.on_loss)
+        # Register loss callback with paper trader
+        paper_trader.register_loss_callback(risk_engine.on_loss)
 
-    # Register candle callback so strategy engine receives candles
-    from market.ingestion import register_candle_callback
-    register_candle_callback(strategy_engine.on_candle)
+        # Register candle callback so strategy engine receives candles
+        from market.ingestion import register_candle_callback
+        register_candle_callback(strategy_engine.on_candle)
 
-    # Also update unrealized PnL on each candle
-    async def pnl_update_on_candle(candle: dict):
-        price = float(candle["close"])
-        await paper_trader.update_unrealized_pnl(candle["symbol"], price)
-    register_candle_callback(pnl_update_on_candle)
+        # Also update unrealized PnL on each candle
+        async def pnl_update_on_candle(candle: dict):
+            price = float(candle["close"])
+            await paper_trader.update_unrealized_pnl(candle["symbol"], price)
+        register_candle_callback(pnl_update_on_candle)
 
-    # Re-activate any strategies that were ACTIVE before restart
-    async with SessionLocal() as session:
-        from models import Strategy
-        result = await session.execute(
-            select(Strategy).where(Strategy.status == "ACTIVE")
-        )
-        active = result.scalars().all()
-        for s in active:
-            strategy_engine.activate(s)
-            log.info("strategy_resumed", name=s.name)
+        # Re-activate any strategies that were ACTIVE before restart
+        if db_ok:
+            async with SessionLocal() as session:
+                from models import Strategy
+                result = await session.execute(
+                    select(Strategy).where(Strategy.status == "ACTIVE")
+                )
+                active = result.scalars().all()
+                for s in active:
+                    strategy_engine.activate(s)
+                    log.info("strategy_resumed", name=s.name)
+
+    except Exception as e:
+        log.error("engine_init_failed", error=str(e))
 
     # 4. Start market ingestion as background task
     ingestion_task = asyncio.create_task(run_market_ingestion())
@@ -223,3 +229,7 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
